@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <script>console.log("GEMINI_DEBUG: Running latest version of InterfaceV2.html");</script>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Répartition Classes - Version Universelle</title>
+  
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- SortableJS pour drag & drop -->
+  <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
+  <!-- Font Awesome pour les icônes -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <!-- Chart.js pour les graphiques -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- SheetJS pour export Excel -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <!-- jsPDF pour export PDF -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <!-- html2canvas pour screenshots PDF -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+  <style id="interfaceV2-styles">
+    <?!= include('InterfaceV2_Styles'); ?>
+  </style>
+</head>
+<body class="min-h-screen bg-gray-50 font-sans text-slate-800">
+
+<!-- SPINNER DE CHARGEMENT GLOBAL -->
+<div id="loadingSpinner" class="fixed inset-0 flex items-center justify-center bg-black bg-opacity-30 z-50 hidden">
+  <div class="spinner"></div>
+</div>
+
+<!-- 1. MODAL DE DÉMARRAGE (indépendant) -->
+<div id="startupModal" class="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-60 hidden" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+  <div class="bg-white rounded-lg shadow-xl p-8 max-w-md w-full text-center relative">
+    <!-- Bouton de fermeture -->
+    <button id="closeStartupModal" class="absolute top-2 right-3 text-gray-400 hover:text-gray-700 text-2xl focus:outline-none" title="Fermer" aria-label="Fermer">
+      <i class="fa fa-times"></i>
+    </button>
+    <h2 id="modal-title" class="text-2xl font-bold mb-4 text-center">Choisissez le mode de travail</h2>
+    <div class="space-y-3 mb-6 flex flex-col items-center">
+  <button class="btn btn-secondary w-11/12 mx-auto" data-mode="TEST">
+    Commencer la répartition (onglets TEST)
+  </button>
+  <button class="btn btn-primary w-11/12 mx-auto" data-mode="CACHE">
+    Reprendre un brouillon (onglets CACHE)
+  </button>
+  <button class="btn btn-success w-11/12 mx-auto" data-mode="FIN">
+    Corriger les classes finalisées (onglets FIN)
+  </button>
+  <button class="btn btn-secondary w-11/12 mx-auto" data-mode="PREVIOUS">
+    Classes de l'année précédente (ex: 6°1, 5°2...)
+  </button>
+</div>
+    <div id="restoreCacheBlock" class="mb-4 hidden text-center">
+      <button id="btnRestoreCache" class="btn btn-warning w-11/12 mx-auto mb-2"><i class="fas fa-history"></i> Reprendre le brouillon (auto-sauvegardé)</button>
+      <div class="text-xs text-gray-500 mt-2">Dernière auto-sauvegarde (1min) : <span id="lastCacheDate"></span></div>
+    </div>
+  </div>
+</div>
+
+<!-- 2. BADGE DE MODE (indépendant) -->
+<div id="modeBadge" class="fixed top-2 left-2 z-40 px-3 py-1 rounded-full font-bold text-xs shadow-lg hidden"></div>
+
+<!-- 3. CONTENU PRINCIPAL DE L'APPLICATION (en dehors du modal) -->
+<!-- Header moderne avec infos complètes -->
+<header class="app-header px-6 py-3" role="banner" aria-label="Navigation principale">
+  <div class="flex justify-between items-center">
+    <!-- GAUCHE -->
+    <div class="flex items-center gap-4">
+      <!-- Logo -->
+      <div>
+        <h1 class="text-lg font-bold text-slate-800 flex items-center gap-2">
+          <i class="fas fa-graduation-cap text-purple-700"></i>
+          Classes <span id="niveau-detected" class="text-purple-600"></span>
+        </h1>
+      </div>
+
+      <!-- Recherche -->
+      <div class="relative">
+        <input id="search" type="text" placeholder="Rechercher..." class="search-input" aria-label="Rechercher un élève">
+        <i class="fas fa-search absolute right-3 top-1/2 -translate-y-1/2 text-gray-400"></i>
+      </div>
+
+      <!-- Boutons essentiels -->
+      <div class="flex items-center gap-2">
+        <label for="viewModeSelect" class="text-sm font-medium">Vue:</label>
+        <select id="viewModeSelect" class="px-3 py-1 border rounded bg-white text-sm" title="Sélectionner le mode d'affichage">
+          <option value="complete">Complète</option>
+          <option value="essential">Essentielle</option>
+          <option value="simple">Simple</option>
+        </select>
+      </div>
+
+      <!-- Options d'affichage -->
+      <div class="flex items-center gap-3">
+        <label class="flex items-center gap-1 text-sm cursor-pointer" title="Afficher des badges colorés (bleu ♂, rose ♀)">
+          <input type="checkbox" id="showGenderBadges" class="w-4 h-4 cursor-pointer">
+          <span>Badges sexe</span>
+        </label>
+        <label class="flex items-center gap-1 text-sm cursor-pointer" title="Activer le fond blanc pour les cartes">
+          <input type="checkbox" id="whiteBackground" class="w-4 h-4 cursor-pointer">
+          <span>Fond blanc</span>
+        </label>
+      </div>
+
+      <button id="btnLisibilite" class="btn btn-secondary" title="Options de lisibilité" aria-label="Ouvrir les options de lisibilité">
+        <i class="fas fa-eye"></i> Lisibilité
+      </button>
+      <button id="btnStats" class="btn btn-primary" title="Statistiques" aria-label="Afficher les statistiques">
+        <i class="fas fa-chart-bar"></i> Stats
+      </button>
+      <button id="btnChangeMode" class="btn btn-secondary" onclick="openStartupModal({ force: true })" title="Choisir la source de données (Sources/Test/DEF)">
+        <i class="fas fa-database"></i> Source
+      </button>
+      <button id="btnSwapMain" class="btn btn-secondary" title="Activer le mode permutation d'élèves">
+        <i class="fas fa-exchange-alt"></i> SWAP
+      </button>
+      <button id="btnSaveWIP" class="btn btn-secondary" title="Sauvegarder en brouillon (CACHE)">
+        <i class="fas fa-save"></i> 💾 Brouillon
+      </button>
+      <button id="btnFinalize" class="btn btn-success" title="Finaliser les classes définitives">
+        <i class="fas fa-check-circle"></i> ✅ FINALISER
+      </button>
+    </div>
+
+    <!-- DROITE -->
+    <nav class="flex items-center gap-3" role="navigation" aria-label="Menus d'actions">
+      <!-- Menu Paramètres -->
+      <div class="relative" id="settingsMenuWrapper">
+        <button id="btnSettings" class="btn btn-secondary flex items-center gap-2" title="Paramètres et options" aria-expanded="false" aria-haspopup="menu">
+          <i class="fas fa-cog"></i> Paramètres <i class="fas fa-caret-down"></i>
+        </button>
+        <div id="settingsDropdown" class="absolute right-0 mt-2 w-72 bg-white rounded shadow-lg z-50 hidden overflow-hidden" role="menu" aria-hidden="true">
+
+          <!-- Section Affichage -->
+          <div class="settings-section">
+            <div class="settings-section-header">
+              <i class="fas fa-palette"></i> Affichage
+            </div>
+            <button id="menuDarkMode" class="settings-item" role="menuitem">
+              <i class="fas fa-moon"></i> Mode sombre
+            </button>
+            <button id="menuZoom" class="settings-item" role="menuitem">
+              <i class="fas fa-search-plus"></i> Zoom cartes
+            </button>
+            <button id="menuFullscreen" class="settings-item" role="menuitem">
+              <i class="fas fa-expand"></i> Plein écran
+            </button>
+          </div>
+
+          <!-- Section Actions -->
+          <div class="settings-section">
+            <div class="settings-section-header">
+              <i class="fas fa-bolt"></i> Actions
+            </div>
+            <div class="flex gap-1 px-4 py-2">
+              <button id="btnUndo" class="flex-1 settings-item-inline" disabled role="menuitem">
+                <i class="fas fa-undo"></i> Annuler
+              </button>
+              <button id="btnRedo" class="flex-1 settings-item-inline" disabled role="menuitem">
+                <i class="fas fa-redo"></i> Refaire
+              </button>
+            </div>
+            <button id="btnHistory" class="settings-item" role="menuitem">
+              <i class="fas fa-history"></i> Historique
+            </button>
+          </div>
+
+          <!-- Section Groupes -->
+          <div class="settings-section">
+            <div class="settings-section-header">
+              <i class="fas fa-layer-group"></i> Groupes
+            </div>
+            <button id="menuOpenGroups" class="settings-item" role="menuitem" onclick="openGroupsInterface('creator')">
+              <i class="fas fa-plus-circle"></i> Créer des groupes
+            </button>
+            <button id="menuManageGroups" class="settings-item" role="menuitem" onclick="openGroupsInterface('manager')">
+              <i class="fas fa-cog"></i> Gérer les groupes
+            </button>
+          </div>
+
+          <!-- Section Données -->
+          <div class="settings-section">
+            <div class="settings-section-header">
+              <i class="fas fa-database"></i> Données
+            </div>
+            <button id="menuImportScores" class="settings-item" role="menuitem">
+              <i class="fas fa-upload"></i> Import Scores
+            </button>
+            <button id="btnExport" class="settings-item" role="menuitem">
+              <i class="fas fa-download"></i> Export
+            </button>
+            <button id="menuRules" class="settings-item" role="menuitem">
+              <i class="fas fa-edit"></i> Règles
+            </button>
+          </div>
+
+          <!-- Section Filtres -->
+          <div class="settings-section">
+            <div class="settings-section-header">
+              <i class="fas fa-filter"></i> Filtres
+            </div>
+            <div class="px-4 py-2 grid grid-cols-2 gap-1">
+              <button class="filter-btn-compact" data-filter="all">Tous</button>
+              <button class="filter-btn-compact" data-filter="PERMUT">PERMUT</button>
+              <button class="filter-btn-compact" data-filter="FIXE">FIXE</button>
+              <button class="filter-btn-compact" data-filter="ESP">ESP</button>
+              <button class="filter-btn-compact" data-filter="ITA">ITA</button>
+              <button class="filter-btn-compact" data-filter="ALL">ALL</button>
+              <button class="filter-btn-compact" data-filter="D">Disso</button>
+              <button class="filter-btn-compact" data-filter="A">Asso</button>
+            </div>
+          </div>
+
+          <!-- Section Aide -->
+          <div class="settings-section">
+            <div class="settings-section-header">
+              <i class="fas fa-question-circle"></i> Aide
+            </div>
+            <button id="btnHelp" class="settings-item" role="menuitem">
+              <i class="fas fa-keyboard"></i> Raccourcis
+            </button>
+            <button id="btnTutorial" class="settings-item" role="menuitem">
+              <i class="fas fa-graduation-cap"></i> Tutoriel
+            </button>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- Admin toujours visible -->
+      <button id="btnAdmin" class="btn btn-admin" title="Mode administrateur" aria-label="Activer le mode administrateur">
+        <i class="fas fa-unlock-alt"></i> Admin
+      </button>
+    </nav>
+  </div>
+</header>
+
+<!-- Zone principale -->
+<main class="w-full" role="main" aria-label="Répartition des élèves">
+  <div id="board"></div>
+</main>
+
+<!-- Panneau de feedback en temps réel (pour les groupes uniquement) -->
+<div id="feedbackPanel" class="feedback-panel" style="display: none;" role="complementary" aria-live="polite" aria-label="Statistiques en temps réel">
+  <div class="feedback-header">
+    <span><i class="fas fa-chart-line mr-2"></i>Indicateurs Groupes</span>
+    <div class="flex gap-2">
+      <button id="minimizeFeedback" class="text-white hover:text-yellow-200 transition-colors" aria-label="Réduire le panneau">
+        <i class="fas fa-minus"></i>
+      </button>
+      <button id="closeFeedback" class="text-white hover:text-red-200 transition-colors" aria-label="Fermer le panneau">
+        <i class="fas fa-times"></i>
+      </button>
+    </div>
+  </div>
+  <div class="feedback-content">
+    <div class="feedback-metric">
+      <span class="metric-label">Équilibre F/M</span>
+      <div class="metric-value" id="balanceMetric" aria-atomic="true">
+        <span id="balanceValue">0.0</span>
+        <div class="metric-change neutral" id="balanceChange">
+          <i class="fas fa-minus"></i>
+          <span>0</span>
+        </div>
+      </div>
+    </div>
+    <div class="feedback-metric">
+      <span class="metric-label">Contraintes</span>
+      <div class="metric-value" id="constraintsMetric" aria-atomic="true">
+        <span id="constraintsValue">0</span>
+        <div class="metric-change neutral" id="constraintsChange">
+          <i class="fas fa-minus"></i>
+          <span>0</span>
+        </div>
+      </div>
+    </div>
+    <div class="feedback-metric">
+      <span class="metric-label">Diversité</span>
+      <div class="metric-value" id="diversityMetric" aria-atomic="true">
+        <span id="diversityValue">0.0</span>
+        <div class="metric-change neutral" id="diversityChange">
+          <i class="fas fa-minus"></i>
+          <span>0</span>
+        </div>
+      </div>
+    </div>
+    <div class="feedback-metric">
+      <span class="metric-label">Taille groupes</span>
+      <div class="metric-value" id="sizeMetric" aria-atomic="true">
+        <span id="sizeValue">0.0</span>
+        <div class="metric-change neutral" id="sizeChange">
+          <i class="fas fa-minus"></i>
+          <span>0</span>
+        </div>
+      </div>
+    </div>
+    <div class="feedback-metric">
+      <span class="metric-label">Équilibre scores</span>
+      <div class="metric-value" id="scoresMetric" aria-atomic="true">
+        <span id="scoresValue">0.0</span>
+        <div class="metric-change neutral" id="scoresChange">
+          <i class="fas fa-minus"></i>
+          <span>0</span>
+        </div>
+      </div>
+    </div>
+    <div class="feedback-metric">
+      <span class="metric-label">Mobilité</span>
+      <div class="metric-value" id="mobilityMetric" aria-atomic="true">
+        <span id="mobilityValue">0.0</span>
+        <div class="metric-change neutral" id="mobilityChange">
+          <i class="fas fa-minus"></i>
+          <span>0</span>
+        </div>
+      </div>
+    </div>
+    <div class="feedback-metric">
+      <span class="metric-label">Score global</span>
+      <div class="metric-value" id="globalScoreMetric" aria-atomic="true">
+        <span id="globalScoreValue">0.0</span>
+        <div class="metric-change neutral" id="globalScoreChange">
+          <i class="fas fa-minus"></i>
+          <span>0</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Panel historique (initialement caché) -->
+<div id="historyPanel" class="history-panel">
+  <div class="p-4 border-b">
+    <h3 class="font-bold text-lg flex items-center justify-between">
+      Historique des actions
+      <button onclick="toggleHistoryPanel()" class="text-gray-400 hover:text-gray-600">
+        <i class="fas fa-times"></i>
+      </button>
+    </h3>
+  </div>
+  <div id="historyTimeline" class="history-timeline"></div>
+</div>
+
+<!-- Menu bookmarks (dropdown) -->
+<div class="relative">
+  <div id="bookmarksMenu" class="bookmarks-menu">
+    <div id="bookmarksList"></div>
+    <div class="new-bookmark-form">
+      <button class="btn btn-primary w-full" onclick="saveAsBookmark()">
+        <i class="fas fa-plus"></i> Nouveau favori
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Panneau rétractable de lisibilité (initialement caché) -->
+<div id="lisibilite-panel" class="fixed top-0 left-0 w-full bg-white shadow-lg z-50 transition-transform duration-300 transform -translate-y-full" style="padding: 24px 0 12px 0;">
+  <div class="max-w-6xl mx-auto px-6">
+    <div class="flex flex-row items-center justify-between mb-6">
+      <div class="text-xl font-bold"><i class="fa fa-eye mr-2"></i>Options de lisibilité</div>
+      <button id="close-lisibilite-panel" class="text-gray-500 hover:text-gray-800 text-2xl px-4 focus:outline-none" title="Fermer"><i class="fa fa-times"></i></button>
+    </div>
+    
+    <!-- Options de lisibilité -->
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+      
+      <!-- Taille des noms -->
+      <div class="bg-gray-50 p-4 rounded-lg">
+        <h3 class="font-semibold mb-3 text-gray-800">Taille des noms</h3>
+        <div class="space-y-2">
+          <button class="btn-lisibilite" data-size="small">Petite</button>
+          <button class="btn-lisibilite active" data-size="medium">Moyenne</button>
+          <button class="btn-lisibilite" data-size="large">Grande</button>
+          <button class="btn-lisibilite" data-size="xlarge">Très grande</button>
+        </div>
+      </div>
+      
+      <!-- Style des noms -->
+      <div class="bg-gray-50 p-4 rounded-lg">
+        <h3 class="font-semibold mb-3 text-gray-800">Style des noms</h3>
+        <div class="space-y-2">
+          <button class="btn-lisibilite active" data-style="normal">Normal</button>
+          <button class="btn-lisibilite" data-style="bold">Gras</button>
+          <button class="btn-lisibilite" data-style="highlight">Surligné</button>
+          <button class="btn-lisibilite" data-style="outline">Encadré</button>
+        </div>
+      </div>
+      
+      <!-- Contraste -->
+      <div class="bg-gray-50 p-4 rounded-lg">
+        <h3 class="font-semibold mb-3 text-gray-800">Contraste</h3>
+        <div class="space-y-2">
+          <button class="btn-lisibilite active" data-contrast="normal">Normal</button>
+          <button class="btn-lisibilite" data-contrast="high">Élevé</button>
+          <button class="btn-lisibilite" data-contrast="max">Maximum</button>
+        </div>
+      </div>
+      
+      <!-- Symboles genres -->
+      <div class="bg-gray-50 p-4 rounded-lg">
+        <h3 class="font-semibold mb-3 text-gray-800">Affichage genres</h3>
+        <div class="space-y-2">
+          <button class="btn-lisibilite active" data-symbols="colors">Couleurs</button>
+          <button class="btn-lisibilite" data-symbols="symbols">Symboles</button>
+          <button class="btn-lisibilite" data-symbols="both">Couleurs + Symboles</button>
+        </div>
+      </div>
+      
+    </div>
+
+    <!-- Cases à cocher pour affichage -->
+    <div class="mt-6">
+      <div class="bg-gray-50 p-4 rounded-lg">
+        <h3 class="font-semibold mb-3 text-gray-800">Éléments à afficher</h3>
+        <div class="space-y-2">
+          <label class="flex items-center gap-2 text-sm cursor-pointer hover:bg-gray-100 p-2 rounded transition-colors">
+            <input type="checkbox" id="toggle-prenoms" checked class="h-4 w-4 rounded accent-purple-600">
+            <span>Afficher les prénoms</span>
+          </label>
+          <label class="flex items-center gap-2 text-sm cursor-pointer hover:bg-gray-100 p-2 rounded transition-colors">
+            <input type="checkbox" id="toggle-classe" checked class="h-4 w-4 rounded accent-purple-600">
+            <span>Afficher la classe d'origine</span>
+          </label>
+          <label class="flex items-center gap-2 text-sm cursor-pointer hover:bg-gray-100 p-2 rounded transition-colors">
+            <input type="checkbox" id="toggle-scores" checked class="h-4 w-4 rounded accent-purple-600">
+            <span>Afficher les badges de scores</span>
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <!-- Boutons d'action -->
+    <div class="flex justify-between items-center mt-6 pt-4 border-t border-gray-200">
+      <button id="reset-lisibilite" class="btn btn-secondary">
+        <i class="fas fa-undo"></i> Réinitialiser
+      </button>
+      <button id="fullscreen-mode" class="btn btn-primary">
+        <i class="fas fa-expand"></i> Mode plein écran
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- TEMPLATES - À PLACER JUSTE AVANT LA FIN DU BODY -->
+<template id="tpl-carte-eleve">
+  <div class="student-card" draggable="true" data-id="">
+    <div class="card-content-line">
+      <div class="student-fullname"></div>
+      <div class="all-badges"></div>
+      <div class="source-class text-xs font-medium text-gray-700"></div>
+      <div class="scores"></div>
+      <div class="badge-dispo-container"></div>
+    </div>
+  </div>
+</template>
+
+<template id="tpl-classe-col">
+  <div class="class-column fade-in">
+    <div class="class-header">
+      <div class="class-title-line">
+        <h2 class="classe-name"></h2>
+        <div class="class-counts">
+          <span><i class="fas fa-users opacity-75"></i> <span class="count font-bold">0</span></span>
+          <span class="text-pink-200"><i class="fas fa-venus"></i> <span class="count-f font-bold">0</span></span>
+          <span class="text-blue-200"><i class="fas fa-mars"></i> <span class="count-m font-bold">0</span></span>
+        </div>
+      </div>
+      <div class="sort-buttons">
+        <button class="sort-btn" data-sort="name" title="Trier par nom (A→Z ou Z→A)">
+          <span class="sort-label">ABC</span>
+          <span class="sort-arrow">⇅</span>
+        </button>
+        <button class="sort-btn" data-sort="lv2" title="Trier par langue (ESP→ITA→ALL→LATIN→GRECO)">
+          <span class="sort-label">LV2</span>
+          <span class="sort-arrow">⇅</span>
+        </button>
+        <button class="sort-btn" data-sort="option" title="Trier par option (alphabétique)">
+          <span class="sort-label">OPT</span>
+          <span class="sort-arrow">⇅</span>
+        </button>
+        <button class="sort-btn" data-sort="score" title="Trier par comportement (🟩 Vert=meilleurs en haut ↑ / 🔴 Rouge=pires en haut ↓)">
+          <span class="sort-label">COM</span>
+          <span class="sort-arrow">⇅</span>
+        </button>
+      </div>
+    </div>
+    <div class="droppable-zone" data-classe=""></div>
+  </div>
+</template>
+
+<!-- OVERLAY et MODALES (si absents, à compléter selon besoin) -->
+<div id="overlay" class="overlay hidden"></div>
+
+<!-- Modal Export -->
+<div id="exportModal" class="modal hidden">
+  <div class="modal-content">
+    <div class="modal-header">
+      <h2 class="text-xl font-bold">Exporter la répartition</h2>
+      <button onclick="closeExportModal()" class="text-gray-400 hover:text-gray-600">
+        <i class="fas fa-times"></i>
+      </button>
+    </div>
+    <div class="modal-body">
+      <div class="grid grid-cols-2 gap-4">
+        <button onclick="exportExcel()" class="btn btn-primary">
+          <i class="fas fa-file-excel"></i> Export Excel
+        </button>
+        <button onclick="exportPDF()" class="btn btn-primary">
+          <i class="fas fa-file-pdf"></i> Export PDF
+        </button>
+        <button onclick="exportAsImage()" class="btn btn-primary">
+          <i class="fas fa-camera"></i> Export Image (PNG)
+        </button>
+        <button onclick="showComparison()" class="btn btn-secondary">
+          <i class="fas fa-exchange-alt"></i> Comparer avant/après
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal Règles -->
+<div id="rulesModal" class="modal hidden">
+  <div class="modal-content">
+    <div class="modal-header">
+      <h2 class="text-xl font-bold">Éditer les règles de répartition</h2>
+      <button onclick="closeRulesModal()" class="text-gray-400 hover:text-gray-600">
+        <i class="fas fa-times"></i>
+      </button>
+    </div>
+    <div class="modal-body">
+      <div id="rulesContainer"></div>
+    </div>
+    <div class="modal-footer">
+      <button onclick="closeRulesModal()" class="btn btn-secondary">Annuler</button>
+      <button onclick="saveRules()" class="btn btn-primary">Sauvegarder</button>
+    </div>
+  </div>
+</div>
+
+<!-- Panneau Statistiques -->
+<div id="statsPanel" class="fixed top-0 right-0 h-full bg-white shadow-xl transform translate-x-full transition-transform duration-300 stats-panel">
+  <div class="stats-panel-header">
+    <h2 class="text-lg font-bold">Statistiques détaillées</h2>
+    <div class="flex gap-2">
+      <button id="btnFullscreen" class="btn btn-sm" onclick="toggleFullscreenStats()">
+        <i class="fas fa-expand"></i>
+      </button>
+      <button id="btnAnchor" class="btn btn-sm" onclick="toggleAnchoredStats()">
+        <i class="fas fa-thumbtack"></i>
+      </button>
+      <button id="closeStats" class="btn btn-sm">
+        <i class="fas fa-times"></i>
+      </button>
+    </div>
+  </div>
+  <div id="statsContent" class="p-4 overflow-y-auto" style="height: calc(100% - 60px);">
+    <!-- Le contenu sera généré dynamiquement -->
+  </div>
+</div>
+
+<!-- Aide clavier -->
+<div id="keyboardShortcuts" class="keyboard-shortcuts hidden">
+  <h4>Raccourcis clavier</h4>
+  <div class="grid grid-cols-2 gap-2 text-xs">
+    <div class="shortcut-item"><span>Recherche</span><span class="shortcut-key">Ctrl+F</span></div>
+    <div class="shortcut-item"><span>Actualiser</span><span class="shortcut-key">F5</span></div>
+    <div class="shortcut-item"><span>Annuler</span><span class="shortcut-key">Ctrl+Z</span></div>
+    <div class="shortcut-item"><span>Refaire</span><span class="shortcut-key">Ctrl+Y</span></div>
+    <div class="shortcut-item"><span>Mode swap</span><span class="shortcut-key">S</span></div>
+    <div class="shortcut-item"><span>Statistiques</span><span class="shortcut-key">T</span></div>
+    <div class="shortcut-item"><span>Mode sombre</span><span class="shortcut-key">D</span></div>
+    <div class="shortcut-item"><span>Vue simple</span><span class="shortcut-key">V</span></div>
+    <div class="shortcut-item"><span>Tutoriel</span><span class="shortcut-key">H</span></div>
+    <div class="shortcut-item"><span>Fermer modals</span><span class="shortcut-key">Échap</span></div>
+    </div>
+</div>
+
+  <!-- Scripts HtmlService injectés en fin de document pour garantir leur exécution après le chargement du DOM -->
+  <?!= include('InterfaceV2_CoreScript'); ?>
+
+  <?!= include('InterfaceV2_StatsCleanupScript'); ?>
+
+<!-- ========== INCLUSION DU MODULE COMPLET DE GROUPES (GOOGLE APPS SCRIPT) ========== -->
+<?!= include('groupsModuleComplete'); ?>
+
+  <?!= include('InterfaceV2_GroupsScript'); ?>
+
+</body>
+</html>

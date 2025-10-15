@@ -1,0 +1,1192 @@
+<script>
+(function(global) {
+  'use strict';
+
+  const windowRef = global || (typeof window !== 'undefined' ? window : undefined);
+  const documentRef = windowRef?.document;
+  if (!windowRef || !documentRef) {
+    console?.log?.('GroupsModule: environnement navigateur non détecté.');
+    return;
+  }
+
+  const GROUP_TYPES = {
+    random: {
+      title: "Aléatoire maîtrisé",
+      description: "Répartition rapide et homogène en respectant la taille choisie.",
+      icon: "🎲"
+    },
+    balanced: {
+      title: "Équilibre pédagogique",
+      description: "Prend en compte parité, LV2 et indicateurs pour harmoniser les groupes.",
+      icon: "⚖️"
+    },
+    performance: {
+      title: "Différenciation fine",
+      description: "Utilise les scores pour répartir les niveaux et favoriser l'entraide.",
+      icon: "📊"
+    }
+  };
+
+  const CONSTANTS = {
+    minGroupSize: 2,
+    maxGroupSize: 6
+  };
+
+  const state = {
+    currentStep: 1,
+    groupType: 'random',
+    groupSize: 4,
+    students: [],
+    filteredStudents: [],
+    studentsById: new Map(),
+    selectedStudents: new Set(),
+    generatedGroups: [],
+    isLoadingStudents: false,
+    loadError: null,
+    searchTerm: '',
+    modal: null,
+    lastGeneration: null,
+    showStatistics: true,
+    draggedStudent: null,
+    draggedFromGroupIndex: null
+  };
+
+  const SELECTORS = {
+    modal: '[data-groups-modal]',
+    stepContainer: '[data-groups-step-container]',
+    stepperItem: '[data-stepper-item]',
+    selectedCount: '[data-selected-count]',
+    groupsContainer: '[data-generated-groups]',
+    footerPrimary: '[data-footer-primary]',
+    footerSecondary: '[data-footer-secondary]',
+    footerExtras: '[data-footer-extras]'
+  };
+
+  function qs(selector, scope = documentRef) {
+    return scope.querySelector(selector);
+  }
+
+  function qsa(selector, scope = documentRef) {
+    return Array.from(scope.querySelectorAll(selector));
+  }
+
+  function clamp(value, min, max) {
+    return Math.max(min, Math.min(max, value));
+  }
+
+  function showToast(message, type = 'info') {
+    try {
+      const toast = documentRef.createElement('div');
+      toast.className = 'fixed top-6 right-6 z-[9999] px-5 py-3 rounded-2xl shadow-2xl text-white font-semibold flex items-center gap-3';
+      toast.style.background = type === 'error'
+        ? 'linear-gradient(135deg, #ef4444, #dc2626)'
+        : type === 'success'
+          ? 'linear-gradient(135deg, #22c55e, #16a34a)'
+          : 'linear-gradient(135deg, #6366f1, #7c3aed)';
+      toast.innerHTML = `<i class="fas ${type === 'error' ? 'fa-circle-exclamation' : type === 'success' ? 'fa-circle-check' : 'fa-circle-info'}"></i><span>${message}</span>`;
+      documentRef.body.appendChild(toast);
+      setTimeout(() => {
+        toast.style.opacity = '0';
+        toast.style.transform = 'translateY(-6px)';
+        setTimeout(() => toast.remove(), 220);
+      }, 2800);
+    } catch (error) {
+      console.error('GroupsModule toast error:', error);
+    }
+  }
+
+  function createModal() {
+    closeModal();
+
+    const overlay = documentRef.createElement('div');
+    overlay.dataset.groupsModal = 'true';
+    overlay.setAttribute('data-groups-modal', 'true');
+    overlay.className = 'fixed inset-0 z-[9998] flex items-center justify-center bg-slate-900/60 px-4';
+
+    const panel = documentRef.createElement('div');
+    panel.className = 'bg-white rounded-3xl shadow-2xl w-full max-w-6xl max-h-[92vh] overflow-hidden flex flex-col';
+    panel.innerHTML = `
+      <header class="px-8 pt-8 pb-6 border-b border-slate-200/70 bg-gradient-to-r from-indigo-50 via-white to-white">
+        <div class="flex flex-col md:flex-row md:items-start md:justify-between gap-6">
+          <div>
+            <h2 class="text-2xl font-semibold text-slate-900 flex items-center gap-3">
+              <span class="inline-flex h-11 w-11 items-center justify-center rounded-2xl bg-indigo-100 text-indigo-600 text-xl">${GROUP_TYPES[state.groupType]?.icon || '✨'}</span>
+              Assistant de groupes
+            </h2>
+            <p class="text-sm text-slate-600 mt-2 max-w-xl">
+              Suivez les étapes pour choisir la stratégie, sélectionner vos élèves et générer des groupes équilibrés.
+            </p>
+          </div>
+          <button type="button" class="text-slate-400 hover:text-slate-600 transition-colors" data-close-modal>
+            <i class="fas fa-times text-xl"></i>
+          </button>
+        </div>
+        <nav class="mt-6 flex flex-col gap-4">
+          <ol class="flex items-center justify-between gap-4" data-stepper>
+            ${[1, 2, 3].map(step => `
+              <li data-stepper-item="${step}" class="flex-1">
+                <div class="flex items-center gap-3">
+                  <span class="step-circle">${step}</span>
+                  <span class="step-label">${step === 1 ? 'Stratégie' : step === 2 ? 'Sélection' : 'Génération'}</span>
+                </div>
+              </li>
+            `).join('')}
+          </ol>
+        </nav>
+      </header>
+      <div class="flex-1 overflow-y-auto px-8 py-6" data-groups-step-container></div>
+      <footer class="border-t border-slate-200 bg-white px-8 py-5 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+        <div class="flex items-center gap-3 text-sm text-slate-500" data-footer-extras></div>
+        <div class="flex items-center gap-3">
+          <button type="button" class="px-4 py-2 rounded-xl bg-slate-100 text-slate-600 font-semibold hover:bg-slate-200 transition-colors" data-footer-secondary></button>
+          <button type="button" class="px-4 py-2 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 text-white font-semibold shadow-lg shadow-purple-500/30 hover:shadow-purple-500/40 hover:-translate-y-0.5 transition" data-footer-primary></button>
+        </div>
+      </footer>
+    `;
+
+    overlay.appendChild(panel);
+    documentRef.body.appendChild(overlay);
+
+    state.modal = overlay;
+
+    overlay.addEventListener('click', event => {
+      if (event.target.dataset.closeModal !== undefined || event.target.closest('[data-close-modal]') || event.target === overlay) {
+        closeModal();
+      }
+    });
+
+    documentRef.addEventListener('keydown', handleEscapeClose);
+
+    renderStep();
+    updateStepper();
+    updateFooter();
+  }
+
+  function closeModal() {
+    if (state.modal) {
+      state.modal.remove();
+      state.modal = null;
+      documentRef.removeEventListener('keydown', handleEscapeClose);
+    }
+  }
+
+  function handleEscapeClose(event) {
+    if (event.key === 'Escape') {
+      closeModal();
+    }
+  }
+
+  function renderStep() {
+    const container = qs(SELECTORS.stepContainer, state.modal);
+    if (!container) return;
+
+    let html = '';
+    switch (state.currentStep) {
+      case 1:
+        html = renderStepOne();
+        break;
+      case 2:
+        html = renderStepTwo();
+        break;
+      case 3:
+        html = renderStepThree();
+        break;
+      default:
+        html = '<p class="text-center text-slate-500">Étape inconnue.</p>';
+    }
+
+    container.innerHTML = html;
+    bindStepEvents();
+  }
+
+  function renderStepOne() {
+    return `
+      <div class="space-y-8">
+        <div class="grid md:grid-cols-3 gap-4">
+          ${Object.entries(GROUP_TYPES).map(([key, config]) => `
+            <article class="group-type-card ${state.groupType === key ? 'selected' : ''}" data-group-type="${key}">
+              <div class="icon">${config.icon}</div>
+              <h3>${config.title}</h3>
+              <p>${config.description}</p>
+              <div class="example">${state.groupType === key ? 'Sélectionné' : 'Sélectionner'}</div>
+            </article>
+          `).join('')}
+        </div>
+        <div class="rounded-2xl border border-slate-200 bg-slate-50 px-6 py-5 flex flex-col md:flex-row md:items-center md:justify-between gap-5">
+          <div>
+            <h4 class="text-lg font-semibold text-slate-900">Taille des groupes</h4>
+            <p class="text-sm text-slate-600">Choisissez le nombre d'élèves par groupe. La taille sera respectée quelle que soit la stratégie.</p>
+          </div>
+          <div class="flex items-center gap-4">
+            <input type="range" min="${CONSTANTS.minGroupSize}" max="${CONSTANTS.maxGroupSize}" value="${state.groupSize}" class="w-40 accent-purple-600" data-group-size>
+            <span class="text-2xl font-semibold text-purple-600" data-group-size-display>${state.groupSize}</span>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderStepTwo() {
+    const loading = state.isLoadingStudents;
+    const error = state.loadError;
+    const students = getFilteredStudents();
+
+    return `
+      <div class="space-y-6">
+        <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+          <div class="space-y-1">
+            <h3 class="text-lg font-semibold text-slate-900">Sélectionnez les élèves</h3>
+            <p class="text-sm text-slate-600">Cochez les élèves à inclure. Vous pouvez filtrer par nom, classe ou LV2.</p>
+          </div>
+          <div class="flex items-center gap-3 text-sm text-slate-500">
+            <span class="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-indigo-50 text-indigo-600">
+              <i class="fas fa-user-check"></i>
+              <span data-selected-count>${state.selectedStudents.size}</span> sélectionné(s)
+            </span>
+            <button type="button" class="px-3 py-1.5 rounded-full bg-slate-100 hover:bg-slate-200 transition-colors" data-action="select-all">Tout sélectionner</button>
+            <button type="button" class="px-3 py-1.5 rounded-full bg-slate-100 hover:bg-slate-200 transition-colors" data-action="deselect-all">Tout désélectionner</button>
+          </div>
+        </div>
+        <div class="relative">
+          <span class="absolute inset-y-0 left-4 flex items-center text-slate-400"><i class="fas fa-search"></i></span>
+          <input type="search" value="${state.searchTerm}" placeholder="Rechercher par nom, classe, LV2..." class="w-full pl-12 pr-4 py-3 border border-slate-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-purple-500" data-action="search">
+        </div>
+        <div class="rounded-3xl border border-slate-200 bg-white p-4 max-h-[48vh] overflow-y-auto">
+          ${loading ? renderLoadingStudents() : error ? renderErrorState(error) : renderStudentsList(students)}
+        </div>
+      </div>
+    `;
+  }
+
+  function renderStepThree() {
+    const groups = state.generatedGroups;
+    if (!groups.length) {
+      return '<div class="text-center text-slate-500">Aucun groupe généré pour le moment.</div>';
+    }
+
+    return `
+      <div class="space-y-6">
+        <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+          <div>
+            <h3 class="text-lg font-semibold text-slate-900">Groupes générés</h3>
+            <p class="text-sm text-slate-600">Glissez-déposez les élèves entre les groupes. ${state.showStatistics ? 'Les statistiques se mettent à jour automatiquement.' : ''}</p>
+          </div>
+          <div class="flex flex-wrap gap-3 text-xs uppercase tracking-[0.25em] text-slate-500">
+            <span class="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-indigo-50 text-indigo-600"><i class="fas fa-wand-magic-sparkles"></i>${GROUP_TYPES[state.groupType]?.title || ''}</span>
+            <span class="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-100 text-slate-600"><i class="fas fa-users"></i>${groups.reduce((total, g) => total + g.students.length, 0)} élèves</span>
+            <button type="button" class="inline-flex items-center gap-2 px-3 py-1.5 rounded-full ${state.showStatistics ? 'bg-purple-100 text-purple-700' : 'bg-slate-100 text-slate-600'} hover:bg-purple-200 transition-colors" data-action="toggle-stats">
+              <i class="fas fa-chart-bar"></i>
+              ${state.showStatistics ? 'Masquer' : 'Afficher'} stats
+            </button>
+          </div>
+        </div>
+        <div class="flex gap-5">
+          <div class="${state.showStatistics ? 'flex-1' : 'w-full'} grid md:grid-cols-2 gap-5" data-generated-groups>
+            ${groups.map((group, index) => renderGroupCard(group, index)).join('')}
+          </div>
+          ${state.showStatistics ? `
+            <div class="w-80 flex-shrink-0">
+              <div class="sticky top-4 space-y-4">
+                ${renderStatisticsPanel()}
+              </div>
+            </div>
+          ` : ''}
+        </div>
+      </div>
+    `;
+  }
+
+  function renderLoadingStudents() {
+    return `
+      <div class="flex items-center justify-center py-12 text-slate-500 gap-3">
+        <span class="spinner"></span>
+        Chargement des élèves depuis Google Sheets...
+      </div>
+    `;
+  }
+
+  function renderErrorState(error) {
+    return `
+      <div class="text-center text-red-500 py-10 space-y-3">
+        <i class="fas fa-circle-exclamation text-2xl"></i>
+        <p>Impossible de charger les élèves : ${error}</p>
+        <button type="button" class="px-4 py-2 rounded-xl bg-red-100 text-red-600 font-semibold" data-action="retry-load">Réessayer</button>
+      </div>
+    `;
+  }
+
+  function renderStudentsList(students) {
+    if (!students.length) {
+      return '<div class="text-center text-slate-500 py-12">Aucun élève à afficher. Vérifiez vos données.</div>';
+    }
+
+    return `
+      <ul class="space-y-3">
+        ${students.map(student => {
+          const isChecked = state.selectedStudents.has(student.id);
+          return `
+            <li class="flex items-center gap-4 p-3 border border-slate-200 rounded-2xl hover:border-purple-200 transition-colors">
+              <label class="flex items-center gap-4 w-full">
+                <input type="checkbox" class="student-checkbox h-5 w-5 rounded accent-purple-600" value="${student.id}" ${isChecked ? 'checked' : ''}>
+                <div class="flex-1">
+                  <p class="font-semibold text-slate-800">${student.nom} ${student.prenom}</p>
+                  <p class="text-xs text-slate-500 flex flex-wrap gap-3">
+                    <span><i class="fas fa-school mr-1"></i>${student.classe || '—'}</span>
+                    <span><i class="fas fa-language mr-1"></i>${student.lv2 || 'LV2 inconnue'}</span>
+                    <span><i class="fas fa-venus-mars mr-1"></i>${student.sexe || 'Non défini'}</span>
+                  </p>
+                </div>
+                ${renderStudentScores(student)}
+              </label>
+            </li>
+          `;
+        }).join('')}
+      </ul>
+    `;
+  }
+
+  function renderStudentScores(student) {
+    const french = student.scores?.F ?? null;
+    const maths = student.scores?.M ?? null;
+    if (french === null && maths === null) {
+      return '<span class="text-xs text-slate-400">Score indisponible</span>';
+    }
+
+    return `
+      <div class="flex flex-col text-xs text-slate-500 text-right">
+        <span class="inline-flex items-center gap-1"><i class="fas fa-feather"></i>F: <strong>${french ?? '—'}</strong></span>
+        <span class="inline-flex items-center gap-1"><i class="fas fa-calculator"></i>M: <strong>${maths ?? '—'}</strong></span>
+      </div>
+    `;
+  }
+
+  function renderGroupCard(group, index) {
+    const stats = computeGroupStats(group.students);
+    return `
+      <article class="border border-slate-200 rounded-3xl bg-white p-5 shadow-sm space-y-4 group-drop-zone" data-group-index="${index}">
+        <header class="flex items-center justify-between">
+          <h4 class="text-lg font-semibold text-slate-900">${group.name || `Groupe ${index + 1}`}</h4>
+          <span class="text-sm text-slate-500">${group.students.length} élève(s)</span>
+        </header>
+        <div class="grid grid-cols-1 gap-3 text-sm text-slate-600">
+          <div class="flex items-center gap-3">
+            <span class="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-indigo-50 text-indigo-600 text-xs font-semibold"><i class="fas fa-venus-mars"></i>${stats.parity}</span>
+            <span class="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-purple-50 text-purple-600 text-xs font-semibold"><i class="fas fa-language"></i>${stats.lv2}</span>
+            <span class="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-50 text-emerald-600 text-xs font-semibold"><i class="fas fa-chart-line"></i>${stats.scores}</span>
+          </div>
+          <div class="space-y-2" data-students-list>
+            ${group.students.map(student => `
+              <div class="flex items-center justify-between bg-slate-50 border border-slate-200 rounded-2xl px-3 py-2 cursor-move hover:bg-slate-100 transition-colors student-item" draggable="true" data-student-id="${student.id}" data-group-index="${index}">
+                <span class="font-medium text-slate-800"><i class="fas fa-grip-vertical text-slate-400 mr-2"></i>${student.nom} ${student.prenom}</span>
+                <span class="text-xs text-slate-500">${student.classe || '—'} · ${student.lv2 || 'LV2 ?'}</span>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      </article>
+    `;
+  }
+
+  function renderStatisticsPanel() {
+    const groups = state.generatedGroups;
+
+    return `
+      <div class="border border-slate-200 rounded-3xl bg-white p-5 shadow-sm space-y-4">
+        <h4 class="text-lg font-semibold text-slate-900 flex items-center gap-2">
+          <i class="fas fa-chart-bar text-purple-600"></i>
+          Statistiques de répartition
+        </h4>
+        <p class="text-xs text-slate-600">Distribution des scores par groupe</p>
+
+        ${renderScoreDistributionTable()}
+
+        ${state.groupType === 'performance' || state.groupType === 'balanced' ? `
+          <div class="mt-6 pt-4 border-t border-slate-200">
+            <h5 class="text-sm font-semibold text-slate-800 mb-3">Critères comportementaux</h5>
+            ${renderBehavioralStats()}
+          </div>
+        ` : ''}
+      </div>
+    `;
+  }
+
+  function renderScoreDistributionTable() {
+    const groups = state.generatedGroups;
+    const distributions = groups.map((group, index) => {
+      const scoresDist = { F: {1: 0, 2: 0, 3: 0, 4: 0}, M: {1: 0, 2: 0, 3: 0, 4: 0} };
+
+      group.students.forEach(student => {
+        const scoreF = Math.round(student.scores?.F || 0);
+        const scoreM = Math.round(student.scores?.M || 0);
+
+        if (scoreF >= 1 && scoreF <= 4) scoresDist.F[scoreF]++;
+        if (scoreM >= 1 && scoreM <= 4) scoresDist.M[scoreM]++;
+      });
+
+      return { name: group.name, scores: scoresDist };
+    });
+
+    return `
+      <div class="space-y-4">
+        ${distributions.map((dist, idx) => `
+          <div class="space-y-2">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-semibold text-slate-700">${dist.name}</span>
+              <span class="text-xs text-slate-500">${groups[idx].students.length} élèves</span>
+            </div>
+            <div class="space-y-1">
+              <div class="flex items-center gap-2">
+                <span class="text-xs text-slate-600 w-8">F:</span>
+                <div class="flex gap-1 flex-1">
+                  ${[1, 2, 3, 4].map(score => `
+                    <div class="flex-1 text-center">
+                      <div class="text-xs font-medium text-white rounded px-1 py-0.5" style="background: ${score === 1 ? '#ef4444' : score === 2 ? '#f97316' : score === 3 ? '#3b82f6' : '#22c55e'}">
+                        ${score}
+                      </div>
+                      <div class="text-xs text-slate-700 font-semibold mt-0.5">${dist.scores.F[score]}</div>
+                    </div>
+                  `).join('')}
+                </div>
+              </div>
+              <div class="flex items-center gap-2">
+                <span class="text-xs text-slate-600 w-8">M:</span>
+                <div class="flex gap-1 flex-1">
+                  ${[1, 2, 3, 4].map(score => `
+                    <div class="flex-1 text-center">
+                      <div class="text-xs font-medium text-white rounded px-1 py-0.5" style="background: ${score === 1 ? '#ef4444' : score === 2 ? '#f97316' : score === 3 ? '#3b82f6' : '#22c55e'}">
+                        ${score}
+                      </div>
+                      <div class="text-xs text-slate-700 font-semibold mt-0.5">${dist.scores.M[score]}</div>
+                    </div>
+                  `).join('')}
+                </div>
+              </div>
+            </div>
+          </div>
+        `).join('<div class="border-t border-slate-100 my-3"></div>')}
+      </div>
+    `;
+  }
+
+  function renderBehavioralStats() {
+    const groups = state.generatedGroups;
+
+    return `
+      <div class="space-y-3">
+        ${groups.map((group, idx) => {
+          let avgCom = 0, avgPart = 0, countF = 0, countM = 0;
+
+          group.students.forEach(student => {
+            avgCom += student.com || 0;
+            avgPart += student.part || 0;
+            if (student.sexe === 'F') countF++;
+            if (student.sexe === 'M') countM++;
+          });
+
+          const total = group.students.length;
+          avgCom = total > 0 ? (avgCom / total).toFixed(1) : 0;
+          avgPart = total > 0 ? (avgPart / total).toFixed(1) : 0;
+
+          return `
+            <div class="bg-slate-50 rounded-xl p-3 space-y-2">
+              <div class="text-xs font-semibold text-slate-700">${group.name}</div>
+              <div class="grid grid-cols-2 gap-2 text-xs">
+                <div class="flex items-center gap-2">
+                  <span class="text-slate-600">F/M:</span>
+                  <span class="font-semibold text-indigo-600">${countF}F / ${countM}M</span>
+                </div>
+                <div class="flex items-center gap-2">
+                  <span class="text-slate-600">COM:</span>
+                  <span class="font-semibold text-emerald-600">${avgCom}</span>
+                </div>
+                <div class="flex items-center gap-2">
+                  <span class="text-slate-600">PART:</span>
+                  <span class="font-semibold text-purple-600">${avgPart}</span>
+                </div>
+              </div>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    `;
+  }
+
+  function computeGroupStats(students) {
+    const counts = { F: 0, M: 0, other: 0 };
+    const lv2 = new Set();
+    const scores = { F: [], M: [] };
+
+    students.forEach(student => {
+      if (student.sexe === 'F') counts.F += 1;
+      else if (student.sexe === 'M') counts.M += 1;
+      else counts.other += 1;
+
+      if (student.lv2) lv2.add(student.lv2);
+
+      if (typeof student.scores?.F === 'number' && student.scores.F > 0) {
+        scores.F.push(student.scores.F);
+      }
+      if (typeof student.scores?.M === 'number' && student.scores.M > 0) {
+        scores.M.push(student.scores.M);
+      }
+    });
+
+    const avg = values => values.length ? (values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(1) : '—';
+
+    return {
+      parity: `${counts.F}F / ${counts.M}M${counts.other ? ` / ${counts.other}·` : ''}`,
+      lv2: lv2.size ? `${lv2.size} LV2` : 'LV2 non renseignées',
+      scores: `F ${avg(scores.F)} · M ${avg(scores.M)}`
+    };
+  }
+
+  function bindStepEvents() {
+    if (!state.modal) return;
+
+    if (state.currentStep === 1) {
+      qsa('[data-group-type]', state.modal).forEach(card => {
+        card.addEventListener('click', () => GroupsModule.selectGroupType(card.dataset.groupType));
+      });
+
+      const range = qs('[data-group-size]', state.modal);
+      const display = qs('[data-group-size-display]', state.modal);
+      if (range && display) {
+        range.addEventListener('input', event => {
+          const value = parseInt(event.target.value, 10);
+          display.textContent = value;
+        });
+        range.addEventListener('change', event => {
+          GroupsModule.updateGroupSize(event.target.value);
+        });
+      }
+    }
+
+    if (state.currentStep === 2) {
+      const search = qs('[data-action="search"]', state.modal);
+      if (search) {
+        search.addEventListener('input', event => {
+          state.searchTerm = event.target.value;
+          renderStep();
+        });
+      }
+
+      const listContainer = qs('.rounded-3xl', state.modal);
+      if (listContainer) {
+        listContainer.addEventListener('change', event => {
+          if (event.target.classList.contains('student-checkbox')) {
+            const id = event.target.value;
+            if (event.target.checked) {
+              state.selectedStudents.add(id);
+            } else {
+              state.selectedStudents.delete(id);
+            }
+            updateSelectedCount();
+          }
+        });
+      }
+
+      qsa('[data-action="select-all"]', state.modal).forEach(button => {
+        button.addEventListener('click', GroupsModule.selectAllStudents);
+      });
+
+      qsa('[data-action="deselect-all"]', state.modal).forEach(button => {
+        button.addEventListener('click', GroupsModule.deselectAllStudents);
+      });
+
+      qsa('[data-action="retry-load"]', state.modal).forEach(button => {
+        button.addEventListener('click', () => {
+          state.loadError = null;
+          loadStudents();
+        });
+      });
+    }
+
+    if (state.currentStep === 3) {
+      // Toggle statistics button
+      qsa('[data-action="toggle-stats"]', state.modal).forEach(button => {
+        button.addEventListener('click', () => {
+          state.showStatistics = !state.showStatistics;
+          renderStep();
+          bindStepEvents();
+        });
+      });
+
+      // Drag and drop for students
+      setupDragAndDrop();
+    }
+  }
+
+  function setupDragAndDrop() {
+    if (!state.modal) return;
+
+    // Drag start on student items
+    qsa('.student-item', state.modal).forEach(item => {
+      item.addEventListener('dragstart', event => {
+        const studentId = event.target.dataset.studentId;
+        const groupIndex = parseInt(event.target.dataset.groupIndex, 10);
+
+        state.draggedStudent = studentId;
+        state.draggedFromGroupIndex = groupIndex;
+
+        event.target.classList.add('opacity-50');
+        event.dataTransfer.effectAllowed = 'move';
+        event.dataTransfer.setData('text/html', event.target.innerHTML);
+      });
+
+      item.addEventListener('dragend', event => {
+        event.target.classList.remove('opacity-50');
+        state.draggedStudent = null;
+        state.draggedFromGroupIndex = null;
+      });
+    });
+
+    // Drop zones on group cards
+    qsa('.group-drop-zone', state.modal).forEach(zone => {
+      zone.addEventListener('dragover', event => {
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'move';
+        zone.classList.add('ring-2', 'ring-purple-400');
+      });
+
+      zone.addEventListener('dragleave', event => {
+        if (event.target === zone) {
+          zone.classList.remove('ring-2', 'ring-purple-400');
+        }
+      });
+
+      zone.addEventListener('drop', event => {
+        event.preventDefault();
+        zone.classList.remove('ring-2', 'ring-purple-400');
+
+        const targetGroupIndex = parseInt(zone.dataset.groupIndex, 10);
+
+        if (state.draggedStudent && state.draggedFromGroupIndex !== null) {
+          moveStudentBetweenGroups(state.draggedFromGroupIndex, targetGroupIndex, state.draggedStudent);
+          state.draggedStudent = null;
+          state.draggedFromGroupIndex = null;
+
+          // Re-render to update UI
+          renderStep();
+          bindStepEvents();
+        }
+      });
+    });
+  }
+
+  function moveStudentBetweenGroups(fromIndex, toIndex, studentId) {
+    if (fromIndex === toIndex) return;
+
+    const fromGroup = state.generatedGroups[fromIndex];
+    const toGroup = state.generatedGroups[toIndex];
+
+    // Find the student in the source group
+    const studentIndex = fromGroup.students.findIndex(s => s.id === studentId);
+    if (studentIndex === -1) return;
+
+    // Remove from source
+    const [student] = fromGroup.students.splice(studentIndex, 1);
+
+    // Add to target
+    toGroup.students.push(student);
+
+    showToast(`${student.nom} ${student.prenom} déplacé vers ${toGroup.name}`, 'success');
+  }
+
+  function updateSelectedCount() {
+    const element = qs(SELECTORS.selectedCount, state.modal);
+    if (element) {
+      element.textContent = state.selectedStudents.size;
+    }
+  }
+
+  function updateStepper() {
+    qsa(SELECTORS.stepperItem, state.modal).forEach(item => {
+      const step = Number(item.dataset.stepperItem);
+      item.classList.toggle('active', step <= state.currentStep);
+      item.classList.toggle('current', step === state.currentStep);
+    });
+  }
+
+  function updateFooter() {
+    const primary = qs(SELECTORS.footerPrimary, state.modal);
+    const secondary = qs(SELECTORS.footerSecondary, state.modal);
+    const extras = qs(SELECTORS.footerExtras, state.modal);
+
+    if (!primary || !secondary || !extras) return;
+
+    extras.innerHTML = '';
+
+    if (state.currentStep === 1) {
+      secondary.textContent = 'Fermer';
+      secondary.onclick = closeModal;
+      primary.textContent = 'Continuer';
+      primary.onclick = () => GroupsModule.nextStep();
+    } else if (state.currentStep === 2) {
+      secondary.textContent = 'Retour';
+      secondary.onclick = () => GroupsModule.previousStep();
+      primary.textContent = 'Générer les groupes';
+      primary.onclick = () => GroupsModule.generateGroups();
+      extras.innerHTML = `<i class="fas fa-info-circle"></i> Sélectionnez les élèves à inclure.`;
+    } else {
+      secondary.textContent = 'Revenir à la sélection';
+      secondary.onclick = () => {
+        state.currentStep = 2;
+        renderStep();
+        updateStepper();
+        updateFooter();
+      };
+      primary.textContent = 'Fermer';
+      primary.onclick = closeModal;
+      extras.innerHTML = `Dernière génération : ${state.lastGeneration || '—'}`;
+
+      const actions = documentRef.createElement('div');
+      actions.className = 'flex items-center gap-2';
+      actions.innerHTML = `
+        <button type="button" class="px-3 py-1.5 rounded-xl bg-indigo-50 text-indigo-600 text-sm font-semibold hover:bg-indigo-100 transition-colors" data-action="regenerate">Régénérer</button>
+        <button type="button" class="px-3 py-1.5 rounded-xl bg-slate-100 text-slate-600 text-sm font-semibold hover:bg-slate-200 transition-colors" data-action="export">Exporter</button>
+        <button type="button" class="px-3 py-1.5 rounded-xl bg-emerald-500 text-white text-sm font-semibold hover:bg-emerald-400 transition-colors" data-action="save">Sauvegarder</button>
+      `;
+      extras.appendChild(actions);
+
+      actions.querySelector('[data-action="regenerate"]').addEventListener('click', () => GroupsModule.regenerateGroups());
+      actions.querySelector('[data-action="export"]').addEventListener('click', () => GroupsModule.exportGroups());
+      actions.querySelector('[data-action="save"]').addEventListener('click', () => GroupsModule.saveGroups());
+    }
+  }
+
+  function getFilteredStudents() {
+    if (!state.searchTerm) return state.students;
+    const term = state.searchTerm.trim().toLowerCase();
+    return state.students.filter(student => {
+      const haystack = [student.nom, student.prenom, student.classe, student.lv2]
+        .map(value => (value || '').toString().toLowerCase())
+        .join(' ');
+      return haystack.includes(term);
+    });
+  }
+
+  function shuffle(array) {
+    const clone = array.slice();
+    for (let i = clone.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [clone[i], clone[j]] = [clone[j], clone[i]];
+    }
+    return clone;
+  }
+
+  function distributeStudents(students) {
+    if (!students.length) return [];
+    const groupsCount = Math.ceil(students.length / state.groupSize);
+    const groups = Array.from({ length: groupsCount }, (_, index) => ({
+      name: `Groupe ${index + 1}`,
+      students: []
+    }));
+
+    students.forEach((student, index) => {
+      groups[index % groupsCount].students.push(student);
+    });
+
+    return groups;
+  }
+
+  function orderBalanced(students) {
+    const buckets = {};
+    students.forEach(student => {
+      const key = `${student.lv2 || 'NA'}|${student.sexe || 'X'}`;
+      if (!buckets[key]) {
+        buckets[key] = [];
+      }
+      buckets[key].push(student);
+    });
+
+    Object.values(buckets).forEach(bucket => bucket.sort(() => Math.random() - 0.5));
+
+    const keys = Object.keys(buckets);
+    const result = [];
+    let index = 0;
+    while (keys.some(key => buckets[key].length)) {
+      const key = keys[index % keys.length];
+      const bucket = buckets[key];
+      if (bucket.length) {
+        result.push(bucket.shift());
+      }
+      index += 1;
+    }
+    return result;
+  }
+
+  function getAverageScore(student) {
+    const scores = [];
+    const mathScore = Number(student.scores?.M || 0);
+    const frenchScore = Number(student.scores?.F || 0);
+    if (mathScore) scores.push(mathScore);
+    if (frenchScore) scores.push(frenchScore);
+    if (!scores.length) return 0;
+    return scores.reduce((sum, value) => sum + value, 0) / scores.length;
+  }
+
+  function orderByPerformance(students) {
+    return students.slice().sort((a, b) => getAverageScore(b) - getAverageScore(a));
+  }
+
+  function generateGroupsInternal() {
+    const selected = Array.from(state.selectedStudents)
+      .map(id => state.studentsById.get(id))
+      .filter(Boolean);
+
+    if (!selected.length) {
+      showToast('Veuillez sélectionner au moins un élève', 'error');
+      return;
+    }
+
+    let ordered;
+    switch (state.groupType) {
+      case 'balanced':
+        ordered = orderBalanced(selected);
+        break;
+      case 'performance':
+        ordered = orderByPerformance(selected);
+        break;
+      case 'random':
+      default:
+        ordered = shuffle(selected);
+        break;
+    }
+
+    const groups = distributeStudents(ordered);
+    state.generatedGroups = groups;
+    state.lastGeneration = new Date().toLocaleString('fr-FR');
+    state.currentStep = 3;
+
+    renderStep();
+    updateStepper();
+    updateFooter();
+    showToast('Groupes générés', 'success');
+  }
+
+  function updateStudents(data) {
+    if (!Array.isArray(data)) {
+      state.loadError = 'Format inattendu reçu.';
+      renderStep();
+      return;
+    }
+    state.students = data;
+    state.studentsById = new Map(data.map(student => [student.id, student]));
+    if (!state.selectedStudents.size) {
+      data.forEach(student => state.selectedStudents.add(student.id));
+    }
+    state.loadError = null;
+    state.isLoadingStudents = false;
+    renderStep();
+    updateSelectedCount();
+  }
+
+  function loadStudents() {
+    if (!google?.script?.run) {
+      state.loadError = 'Google Apps Script non disponible.';
+      state.isLoadingStudents = false;
+      renderStep();
+      return;
+    }
+
+    state.isLoadingStudents = true;
+    renderStep();
+
+    google.script.run
+      .withSuccessHandler(students => {
+        updateStudents(students);
+      })
+      .withFailureHandler(error => {
+        state.isLoadingStudents = false;
+        state.loadError = error?.message || String(error);
+        renderStep();
+      })
+      .getStudentsForGroups();
+  }
+
+  const GroupsModule = {
+    init() {
+      this.updateGroupsButton();
+    },
+
+    open() {
+      state.currentStep = 1;
+      state.searchTerm = '';
+      createModal();
+    },
+
+    close: closeModal,
+
+    nextStep() {
+      if (state.currentStep === 1) {
+        state.currentStep = 2;
+        renderStep();
+        updateStepper();
+        updateFooter();
+        if (!state.students.length) {
+          loadStudents();
+        }
+      }
+    },
+
+    previousStep() {
+      if (state.currentStep > 1) {
+        state.currentStep -= 1;
+        renderStep();
+        updateStepper();
+        updateFooter();
+      }
+    },
+
+    selectGroupType(type) {
+      if (!GROUP_TYPES[type]) return;
+      state.groupType = type;
+      renderStep();
+      updateStepper();
+    },
+
+    updateGroupSize(size) {
+      const parsed = clamp(parseInt(size, 10) || state.groupSize, CONSTANTS.minGroupSize, CONSTANTS.maxGroupSize);
+      state.groupSize = parsed;
+      const display = qs('[data-group-size-display]', state.modal);
+      if (display) {
+        display.textContent = parsed;
+      }
+    },
+
+    selectAllStudents() {
+      state.students.forEach(student => state.selectedStudents.add(student.id));
+      renderStep();
+      updateSelectedCount();
+    },
+
+    deselectAllStudents() {
+      state.selectedStudents.clear();
+      renderStep();
+      updateSelectedCount();
+    },
+
+    updateSelectedCount,
+
+    loadStudents,
+
+    displayStudentsList(students) {
+      updateStudents(students);
+    },
+
+    generateGroups() {
+      if (!state.studentsById.size) {
+        showToast('Les élèves ne sont pas encore chargés', 'error');
+        return;
+      }
+      generateGroupsInternal();
+    },
+
+    displayGroups() {
+      const container = qs(SELECTORS.groupsContainer, state.modal);
+      if (container) {
+        container.innerHTML = state.generatedGroups.map((group, index) => renderGroupCard(group, index)).join('');
+      }
+    },
+
+    exportGroups() {
+      if (!state.generatedGroups.length) {
+        showToast('Aucun groupe à exporter', 'error');
+        return;
+      }
+
+      const payload = {
+        type: state.groupType,
+        size: state.groupSize,
+        generatedAt: new Date().toISOString(),
+        groups: state.generatedGroups.map(group => ({
+          name: group.name,
+          students: group.students.map(student => ({
+            id: student.id,
+            nom: student.nom,
+            prenom: student.prenom,
+            classe: student.classe,
+            sexe: student.sexe,
+            lv2: student.lv2,
+            scores: student.scores
+          }))
+        }))
+      };
+
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = documentRef.createElement('a');
+      link.href = url;
+      link.download = `groupes_${new Date().toISOString().split('T')[0]}.json`;
+      documentRef.body.appendChild(link);
+      link.click();
+      documentRef.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      showToast('Export JSON généré', 'success');
+    },
+
+    saveGroups() {
+      if (!state.generatedGroups.length) {
+        showToast('Veuillez générer des groupes avant de sauvegarder', 'error');
+        return;
+      }
+
+      if (!google?.script?.run) {
+        showToast('Google Apps Script non disponible', 'error');
+        return;
+      }
+
+      const payload = {
+        groups: state.generatedGroups.map(group => ({
+          name: group.name,
+          students: group.students.map(student => student.id)
+        }))
+      };
+
+      google.script.run
+        .withSuccessHandler(() => {
+          showToast('Groupes sauvegardés', 'success');
+          this.updateGroupsButton();
+          try {
+            if (typeof global.notifyGroupsChanged === 'function') {
+              global.notifyGroupsChanged();
+            }
+          } catch (error) {
+            console.warn('notifyGroupsChanged error:', error);
+          }
+        })
+        .withFailureHandler(error => {
+          showToast(`Erreur lors de la sauvegarde : ${error?.message || error}`, 'error');
+        })
+        .saveGroups(payload);
+    },
+
+    regenerateGroups() {
+      generateGroupsInternal();
+    },
+
+    updateGroupsButton() {
+      if (!google?.script?.run) {
+        console.log('GroupsModule: Google Apps Script non disponible pour le compteur.');
+        return;
+      }
+
+      google.script.run
+        .withSuccessHandler(count => {
+          qsa('[data-groups-count]').forEach(element => {
+            element.textContent = count;
+          });
+        })
+        .withFailureHandler(error => {
+          console.error('Impossible de mettre à jour le compteur :', error);
+        })
+        .getGroupsCount();
+    },
+
+    updateStepDisplay() {
+      if (!state.modal) return;
+      updateStepper();
+    }
+  };
+
+  function injectStyles() {
+    if (documentRef.getElementById('groups-module-styles')) return;
+    const style = documentRef.createElement('style');
+    style.id = 'groups-module-styles';
+    style.textContent = `
+      .step-circle {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 2.5rem;
+        height: 2.5rem;
+        border-radius: 999px;
+        background: #e2e8f0;
+        color: #64748b;
+        font-weight: 600;
+        transition: all 0.3s ease;
+      }
+      [data-stepper-item].active .step-circle {
+        background: #6366f1;
+        color: #fff;
+        box-shadow: 0 12px 24px -12px rgba(79, 70, 229, 0.6);
+      }
+      [data-stepper-item].current .step-circle {
+        transform: scale(1.08);
+      }
+      .step-label {
+        font-size: 0.85rem;
+        font-weight: 600;
+        color: #475569;
+      }
+      [data-stepper-item].active .step-label {
+        color: #4c1d95;
+      }
+      .group-type-card {
+        border-radius: 1.5rem;
+        border: 1px solid rgba(148, 163, 184, 0.4);
+        background: white;
+        padding: 1.5rem;
+        text-align: center;
+        cursor: pointer;
+        transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+      }
+      .group-type-card:hover {
+        transform: translateY(-4px);
+        box-shadow: 0 18px 30px -20px rgba(79, 70, 229, 0.45);
+        border-color: rgba(99, 102, 241, 0.65);
+      }
+      .group-type-card.selected {
+        border-color: rgba(99, 102, 241, 0.85);
+        box-shadow: 0 20px 40px -24px rgba(79, 70, 229, 0.55);
+      }
+      .group-type-card .icon {
+        font-size: 2rem;
+        margin-bottom: 0.75rem;
+      }
+      .group-type-card h3 {
+        font-size: 1.1rem;
+        font-weight: 600;
+        color: #1f2937;
+      }
+      .group-type-card p {
+        font-size: 0.9rem;
+        color: #64748b;
+        margin: 0.75rem 0;
+      }
+      .group-type-card .example {
+        font-size: 0.8rem;
+        color: #4f46e5;
+      }
+      .spinner {
+        width: 2rem;
+        height: 2rem;
+        border-radius: 999px;
+        border: 3px solid #e2e8f0;
+        border-top-color: #7c3aed;
+        animation: spin 1s linear infinite;
+      }
+      @keyframes spin {
+        to { transform: rotate(360deg); }
+      }
+    `;
+    documentRef.head.appendChild(style);
+  }
+
+  injectStyles();
+
+  windowRef.GroupsModule = GroupsModule;
+
+  // Initialiser immédiatement si le DOM est déjà chargé, sinon attendre
+  if (documentRef.readyState === 'loading') {
+    documentRef.addEventListener('DOMContentLoaded', () => {
+      console.log('✅ GroupsModule init via DOMContentLoaded');
+      GroupsModule.init();
+    });
+  } else {
+    // DOM déjà chargé (cas des includes Google Apps Script)
+    console.log('✅ GroupsModule init immédiat (DOM déjà chargé)');
+    GroupsModule.init();
+  }
+})(typeof window !== 'undefined' ? window : this);
+</script>
