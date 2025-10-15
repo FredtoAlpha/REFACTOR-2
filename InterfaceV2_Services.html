@@ -1,0 +1,320 @@
+<script>
+// Module de services pour les appels GAS, le chargement de données et la sauvegarde.
+window.App = window.App || {};
+window.App.Services = (() => {
+  // ========== BARRE DE PROGRESSION SAUVEGARDE ==========
+  class SaveProgressManager {
+    constructor() {
+      this.progressBar = null;
+      this.progressFill = null;
+      this.progressPercentage = null;
+      this.currentSave = null;
+      this.init();
+    }
+
+    init() {
+      // Créer la barre de progression dynamiquement
+      const progressHTML = `
+        <div id="saveProgressBar" class="save-progress-bar">
+          <div class="save-progress-header">
+            <span><i class="fas fa-save mr-2"></i>Création des onglets FIN...</span>
+            <button id="minimizeProgress" class="text-white hover:text-yellow-200 transition-colors">
+              <i class="fas fa-minus"></i>
+            </button>
+          </div>
+          <div class="save-progress-content">
+            <div class="progress-bar-container">
+              <div id="progressBarFill" class="progress-bar-fill"></div>
+            </div>
+            <div id="progressPercentage" class="text-center text-sm font-semibold text-gray-700">0%</div>
+            <div class="progress-steps">
+              <div id="step1" class="progress-step">
+                <i class="fas fa-circle-notch"></i>
+                <span>Préparation des données...</span>
+              </div>
+              <div id="step2" class="progress-step">
+                <i class="fas fa-circle-notch"></i>
+                <span>Validation LV2 obligatoire...</span>
+              </div>
+              <div id="step3" class="progress-step">
+                <i class="fas fa-circle-notch"></i>
+                <span>Création onglets FIN...</span>
+              </div>
+              <div id="step4" class="progress-step">
+                <i class="fas fa-circle-notch"></i>
+                <span>Formatage automatique...</span>
+              </div>
+              <div id="step5" class="progress-step">
+                <i class="fas fa-circle-notch"></i>
+                <span>Finalisation...</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+
+      document.body.insertAdjacentHTML('beforeend', progressHTML);
+
+      this.progressBar = document.getElementById('saveProgressBar');
+      this.progressFill = document.getElementById('progressBarFill');
+      this.progressPercentage = document.getElementById('progressPercentage');
+
+      this.setupEventListeners();
+    }
+
+    setupEventListeners() {
+      const minimizeBtn = document.getElementById('minimizeProgress');
+      if (minimizeBtn) {
+        minimizeBtn.addEventListener('click', () => this.toggleMinimize());
+      }
+    }
+
+    start() {
+      if (this.currentSave) {
+        toast('Une sauvegarde est déjà en cours...', 'warning');
+        return false;
+      }
+      this.currentSave = Date.now();
+      this.show();
+      this.updateProgress(0, 'step1');
+      return true;
+    }
+
+    show() {
+      if (this.progressBar) {
+        this.progressBar.classList.add('show');
+      }
+    }
+
+    hide() {
+      if (this.progressBar) {
+        this.progressBar.classList.remove('show');
+      }
+      this.currentSave = null;
+      setTimeout(() => this.reset(), 300);
+    }
+
+    updateProgress(percentage, activeStep) {
+      if (this.progressFill) {
+        this.progressFill.style.width = percentage + '%';
+      }
+      if (this.progressPercentage) {
+        this.progressPercentage.textContent = Math.round(percentage) + '%';
+      }
+
+      const steps = ['step1', 'step2', 'step3', 'step4', 'step5'];
+      const activeIndex = steps.indexOf(activeStep);
+
+      steps.forEach((stepId, index) => {
+        const stepElement = document.getElementById(stepId);
+        if (!stepElement) return;
+
+        const icon = stepElement.querySelector('i');
+        if (index < activeIndex) {
+          stepElement.className = 'progress-step completed';
+          icon.className = 'fas fa-check-circle';
+        } else if (index === activeIndex) {
+          stepElement.className = 'progress-step active';
+          icon.className = 'fas fa-spinner';
+        } else {
+          stepElement.className = 'progress-step';
+          icon.className = 'fas fa-circle-notch';
+        }
+      });
+    }
+
+    complete(success = true) {
+      if (success) {
+        this.updateProgress(100, 'step5');
+        ['step1', 'step2', 'step3', 'step4', 'step5'].forEach(stepId => {
+          const stepElement = document.getElementById(stepId);
+          if (stepElement) {
+            stepElement.className = 'progress-step completed';
+            stepElement.querySelector('i').className = 'fas fa-check-circle';
+          }
+        });
+
+        const header = this.progressBar?.querySelector('.save-progress-header span');
+        if (header) {
+          header.innerHTML = '<i class="fas fa-check mr-2"></i>Onglets INT créés et formatés !';
+        }
+        setTimeout(() => this.hide(), 2000);
+      } else {
+        const header = this.progressBar?.querySelector('.save-progress-header span');
+        if (header) {
+          header.innerHTML = '<i class="fas fa-exclamation-triangle mr-2"></i>Erreur création INT';
+          header.parentElement.style.background = 'linear-gradient(135deg, #dc2626 0%, #b91c1c 100%)';
+        }
+        setTimeout(() => this.hide(), 3000);
+      }
+    }
+
+    reset() {
+      this.updateProgress(0, 'step1');
+      const header = this.progressBar?.querySelector('.save-progress-header span');
+      if (header) {
+        header.innerHTML = '<i class="fas fa-save mr-2"></i>Création des onglets FIN...';
+        header.parentElement.style.background = 'linear-gradient(135deg, #10b981 0%, #059669 100%)';
+      }
+    }
+
+    toggleMinimize() {
+      const content = this.progressBar?.querySelector('.save-progress-content');
+      if (content) {
+        content.style.display = content.style.display === 'none' ? 'block' : 'none';
+      }
+    }
+  }
+
+  const saveProgressManager = new SaveProgressManager();
+
+  async function saveWithProgressINT() {
+    if (!saveProgressManager.start()) return;
+
+    try {
+      saveProgressManager.updateProgress(25, 'step1');
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      const disposition = exportDisposition();
+      if (Object.keys(disposition).length === 0) {
+        throw new Error('Aucune classe à sauvegarder');
+      }
+
+      saveProgressManager.updateProgress(50, 'step2');
+      await new Promise(resolve => setTimeout(resolve, 300));
+
+      saveProgressManager.updateProgress(75, 'step3');
+
+      const result = await gsRun('saveElevesSnapshot', disposition, STATE.currentMode);
+      if (!result?.success) {
+        throw new Error(result?.error || 'Erreur serveur');
+      }
+
+      saveProgressManager.updateProgress(90, 'step4');
+      await new Promise(resolve => setTimeout(resolve, 300));
+
+      saveProgressManager.updateProgress(100, 'step5');
+      await new Promise(resolve => setTimeout(resolve, 200));
+
+      saveProgressManager.complete(true);
+      toast(`Onglets INT créés et formatés avec succès pour ${Object.keys(disposition).length} classes`, 'success');
+    } catch (error) {
+      console.error('Erreur création onglets FIN:', error);
+      saveProgressManager.complete(false);
+      toast('Erreur: ' + error.message, 'error');
+    }
+  }
+
+  function gsRun(fnName, ...args) {
+    return new Promise((resolve, reject) => {
+      console.log(`📡 Appel fonction: ${fnName}`);
+
+      try {
+        if (typeof google !== 'undefined' && google.script && google.script.run) {
+          const api = google.script.run;
+
+          if (typeof api[fnName] === 'function') {
+            api
+              .withSuccessHandler((result) => {
+                console.log(`✅ ${fnName} succès:`, result);
+                resolve(result);
+              })
+              .withFailureHandler((error) => {
+                console.error(`❌ ${fnName} erreur:`, error);
+                reject(error);
+              })[fnName](...args);
+            return;
+          }
+          reject(new Error(`Fonction ${fnName} non disponible dans google.script.run`));
+          return;
+        }
+
+        reject(new Error('Google Apps Script non disponible. Assurez-vous que l\'application est déployée.'));
+      } catch (error) {
+        console.error(`💥 Erreur dans gsRun:`, error);
+        reject(error);
+      }
+    });
+  }
+
+  async function loadDataForMode(mode) {
+    showSpinner();
+    try {
+      const result = await gsRun('getClassesData', mode);
+      if (!result || !result.success) {
+        console.error('❌ Erreur lors du chargement des données:', result?.error);
+        return false;
+      }
+      STATE.originalData = result.data;
+      STATE.rules = result.rules || {};
+      STATE.niveau = detectNiveau(result.data);
+
+      const niveauElement = document.getElementById('niveau-detected');
+      if (niveauElement) {
+        niveauElement.textContent = STATE.niveau;
+      }
+
+      STATE.students = {};
+      STATE.aGroups = {};
+      result.data.forEach(group => {
+        group.eleves.forEach(eleve => {
+          STATE.students[eleve.id] = eleve;
+          if (eleve.asso) {
+            const key = `A${eleve.asso}`;
+            if (!STATE.aGroups[key]) STATE.aGroups[key] = [];
+            STATE.aGroups[key].push(eleve.id);
+          }
+        });
+      });
+
+      renderBoard(result.data);
+      return true;
+    } catch (error) {
+      console.error('💥 Erreur fatale:', error);
+      return false;
+    } finally {
+      hideSpinner();
+    }
+  }
+
+  async function initRepartitionApp() {
+    console.log('🚀 Init universelle...');
+    let mode = localStorage.getItem('mode-selection');
+
+    if (!mode) {
+      openStartupModal();
+      return;
+    }
+
+    STATE.currentMode = mode;
+    showModeBadge(mode);
+
+    if (typeof stopAutoSave === 'function') stopAutoSave();
+    if (typeof stopCacheAutoSave === 'function') stopCacheAutoSave();
+
+    const ok = await loadDataForMode(mode);
+    if (!ok) {
+      showErrorState('Aucune donnée trouvée pour le mode ' + mode);
+      return;
+    }
+
+    if (typeof startAutoSave === 'function') {
+      startAutoSave();
+    }
+  }
+
+  window.saveProgressManager = saveProgressManager;
+  window.saveWithProgressINT = saveWithProgressINT;
+  window.gsRun = gsRun;
+  window.loadDataForMode = loadDataForMode;
+  window.initRepartitionApp = initRepartitionApp;
+
+  return {
+    saveProgressManager,
+    saveWithProgressINT,
+    gsRun,
+    loadDataForMode,
+    initRepartitionApp,
+  };
+})();
+</script>
